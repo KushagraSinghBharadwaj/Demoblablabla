@@ -412,8 +412,45 @@
 }
 
 .search-box input {
-  width: 300px;
-  padding: 0 14px 0 38px;
+  width: 340px;
+  padding: 0 40px 0 38px;
+}
+
+.search-clear {
+  position: absolute;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.search-clear:hover {
+  background: var(--indigo-soft);
+  color: var(--indigo);
+}
+
+.search-clear:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.3);
+}
+
+.hit {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: #fde68a;
+  color: inherit;
+}
+
+.table-scroll.is-pending {
+  opacity: 0.6;
+  transition: opacity var(--transition);
 }
 
 .select-box select {

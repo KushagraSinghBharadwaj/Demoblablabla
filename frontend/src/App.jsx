@@ -68,6 +68,7 @@ function Icon({ name, size = 20 }) {
         <path d="m21 21-4.3-4.3" />
       </>
     ),
+    close: <path d="M18 6 6 18M6 6l12 12" />,
     left: <path d="m15 18-6-6 6-6" />,
     right: <path d="m9 18 6-6-6-6" />,
     alert: (
@@ -239,7 +240,9 @@ function buildDataset(text) {
       dbms,
       average,
       attendance: num('attendance'),
-      key: `${id}\n${name}`.toLowerCase(),
+      idLower: id.toLowerCase(),
+      nameLower: name.toLowerCase(),
+      idNum: /\d+/.test(id) ? Number(id.match(/\d+/)[0]) : NaN,
     })
   }
 
@@ -276,6 +279,60 @@ const formatInt = (v) => intFormat.format(v)
 const formatScore = (v) => (Number.isFinite(v) ? decimalFormat.format(v) : '—')
 const formatPercent = (v) =>
   Number.isFinite(v) ? `${decimalFormat.format(v)}%` : '—'
+
+/* ---------- Search helpers ---------- */
+// A token like "s1", "12" or "S000123" is treated as a student-ID query.
+const ID_LIKE = /^([a-z]*)(\d+)$/
+
+function tokenise(query) {
+  return query.toLowerCase().split(/\s+/).filter(Boolean)
+}
+
+// Every token must match: either the ID (prefix or numeric shorthand, so
+// "1" and "s1" both find S000001) or the name (any substring).
+function matchesToken(s, tok) {
+  const m = ID_LIKE.exec(tok)
+  if (m) {
+    if (s.idLower.startsWith(tok)) return true
+    if (s.idNum === Number(m[2]) && s.idLower.startsWith(m[1])) return true
+    return s.nameLower.includes(tok)
+  }
+  return s.nameLower.includes(tok) || s.idLower.includes(tok)
+}
+
+// Lower rank = better match. Used to put the most relevant rows first.
+function rankStudent(s, tokens, q) {
+  if (tokens.length === 1) {
+    const m = ID_LIKE.exec(tokens[0])
+    if (m && s.idNum === Number(m[2]) && s.idLower.startsWith(m[1])) return 0
+  }
+  if (s.idLower === q) return 0
+  if (s.idLower.startsWith(q)) return 1
+  if (s.nameLower === q) return 1
+  if (s.nameLower.startsWith(q)) return 2
+  const padded = ` ${s.nameLower}`
+  if (tokens.every((t) => padded.includes(` ${t}`))) return 3
+  return 4
+}
+
+function Highlight({ text, pattern }) {
+  if (!text) return '—'
+  if (!pattern) return text
+  const parts = text.split(pattern)
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <mark key={i} className="hit">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </>
+  )
+}
 
 function courseTone(course) {
   let hash = 0
@@ -454,14 +511,34 @@ export default function App() {
   }, [students])
 
   /* Filtering */
+  const searchTokens = useMemo(() => tokenise(deferredSearch), [deferredSearch])
+
+  const hlPattern = useMemo(() => {
+    if (searchTokens.length === 0) return null
+    const escaped = [...searchTokens]
+      .sort((a, b) => b.length - a.length)
+      .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    return new RegExp(`(${escaped.join('|')})`, 'gi')
+  }, [searchTokens])
+
   const filtered = useMemo(() => {
-    const q = deferredSearch.trim().toLowerCase()
-    if (!q && course === 'all') return students
-    return students.filter(
-      (s) =>
-        (course === 'all' || s.course === course) && (!q || s.key.includes(q))
-    )
-  }, [students, deferredSearch, course])
+    if (searchTokens.length === 0) {
+      return course === 'all'
+        ? students
+        : students.filter((s) => s.course === course)
+    }
+    const q = searchTokens.join(' ')
+    const ranked = []
+    for (const s of students) {
+      if (course !== 'all' && s.course !== course) continue
+      if (!searchTokens.every((t) => matchesToken(s, t))) continue
+      ranked.push({ s, r: rankStudent(s, searchTokens, q) })
+    }
+    ranked.sort((a, b) => a.r - b.r) // stable: keeps CSV order within a rank
+    return ranked.map((x) => x.s)
+  }, [students, searchTokens, course])
+
+  const isPending = search !== deferredSearch
 
   /* Pagination */
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -475,6 +552,13 @@ export default function App() {
   const handleSearch = (e) => {
     setSearch(e.target.value)
     setPage(1)
+  }
+  const clearSearch = () => {
+    setSearch('')
+    setPage(1)
+  }
+  const handleSearchKey = (e) => {
+    if (e.key === 'Escape' && search) clearSearch()
   }
   const handleCourse = (e) => {
     setCourse(e.target.value)
@@ -565,23 +649,36 @@ export default function App() {
                   {isReady
                     ? `${formatInt(filtered.length)} matching ${
                         filtered.length === 1 ? 'record' : 'records'
-                      }`
+                      }${searchTokens.length ? ` for “${searchTokens.join(' ')}”` : ''}`
                     : 'Search by name or ID, or filter by course'}
                 </p>
               </div>
 
               <div className="toolbar">
-                <label className="search-box">
-                  <span className="visually-hidden">Search students</span>
+                <div className="search-box">
                   <Icon name="search" size={18} />
                   <input
-                    type="search"
-                    placeholder="Search by name or student ID"
+                    type="text"
+                    aria-label="Search students by name or ID"
+                    placeholder="Search name or ID (e.g. aditya singh, S12)"
+                    autoComplete="off"
+                    spellCheck="false"
                     value={search}
                     onChange={handleSearch}
+                    onKeyDown={handleSearchKey}
                     disabled={!isReady}
                   />
-                </label>
+                  {search && (
+                    <button
+                      type="button"
+                      className="search-clear"
+                      aria-label="Clear search"
+                      onClick={clearSearch}
+                    >
+                      <Icon name="close" size={16} />
+                    </button>
+                  )}
+                </div>
 
                 <label className="select-box">
                   <span className="visually-hidden">Filter by course</span>
@@ -654,7 +751,7 @@ export default function App() {
 
             {isReady && filtered.length > 0 && (
               <>
-                <div className="table-scroll">
+                <div className={`table-scroll${isPending ? ' is-pending' : ''}`}>
                   <table className="data-table">
                     <thead>
                       <tr>
@@ -672,8 +769,12 @@ export default function App() {
                     <tbody>
                       {pageRows.map((s) => (
                         <tr key={s.rowId}>
-                          <td className="cell-id">{s.id || '—'}</td>
-                          <td className="cell-name">{s.name || '—'}</td>
+                          <td className="cell-id">
+                            <Highlight text={s.id} pattern={hlPattern} />
+                          </td>
+                          <td className="cell-name">
+                            <Highlight text={s.name} pattern={hlPattern} />
+                          </td>
                           <td>
                             <span className={`badge course-badge tone-${courseTone(s.course)}`}>
                               {s.course}
